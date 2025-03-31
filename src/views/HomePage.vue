@@ -32,7 +32,7 @@
                 }"
                 @click="seekToTimestamp(noticia.id, timestamp)"
               >
-                {{ timestamp.word }}
+                {{ timestamp.text }}
               </div>
             </div>
             
@@ -64,7 +64,7 @@
                   class="progress-container" 
                   ref="progressContainer"
                   @mousedown="startProgressDrag($event, noticia.id)"
-                  @touchstart="startProgressDrag($event, noticia.id)"
+              
                 >
                   <div class="progress-bar" :style="{ width: getProgressWidth(noticia.id) }"></div>
                   <div 
@@ -153,6 +153,9 @@ const isDragging = ref(false);
 const currentDragId = ref(null);
 const progressContainer = ref(null);
 const frameId = ref(null);
+
+// Variables para el estado de reproducción antes del arrastre
+const wasPlayingBeforeDrag = ref(false);
 
 // Obtener noticias
 const fetchNoticias = async () => {
@@ -315,7 +318,10 @@ const stopAudio = (id) => {
 const setupProgressUpdate = (id) => {
   const updateProgress = () => {
     if (isPlaying(id)) {
-      audioProgress[id] = getCurrentTime(id) / audioDurations[id];
+      const currentTime = getCurrentTime(id);
+      const playbackRate = getPlaybackRate(id);
+      const adjustedTime = currentTime * playbackRate;
+      audioProgress[id] = adjustedTime / audioDurations[id];
       
       // Continuar actualizando
       requestAnimationFrame(updateProgress);
@@ -334,12 +340,13 @@ const setupTimestampEvents = (id) => {
     if (!isPlaying(id)) return;
     
     const currentTime = getCurrentTime(id);
+    const playbackRate = getPlaybackRate(id);
     const timestamps = noticia.timestamps;
     
     let activeIndex = -1;
     for (let i = 0; i < timestamps.length; i++) {
-      const startTime = convertTimeToSeconds(timestamps[i].start);
-      const endTime = convertTimeToSeconds(timestamps[i].end);
+      const startTime = convertTimeToSeconds(timestamps[i].start) / playbackRate;
+      const endTime = convertTimeToSeconds(timestamps[i].end) / playbackRate;
       
       if (currentTime >= startTime && currentTime <= endTime) {
         activeIndex = i;
@@ -350,14 +357,6 @@ const setupTimestampEvents = (id) => {
     // Actualizar el índice del timestamp activo
     if (activeIndex !== -1 && currentTimestampIndex.value[id] !== activeIndex) {
       currentTimestampIndex.value[id] = activeIndex;
-      
-      // Eliminar el scroll automático
-      // setTimeout(() => {
-      //   const activeElement = document.querySelector(`.news-card[data-id="${id}"] .timestamp-item.active`);
-      //   if (activeElement) {
-      //     activeElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      //   }
-      // }, 100);
     }
     
     // Seguir verificando
@@ -391,9 +390,15 @@ const playFromPosition = (id, startTime, updateSourceOnly = false) => {
   if (!audioBuffers[id]) return;
   
   try {
-    // Si hay una fuente de audio activa, detenerla primero
+    // Si hay otro audio reproduciéndose, detenerlo primero
+    if (playingNoticiaId.value !== null && playingNoticiaId.value !== id) {
+      stopAudio(playingNoticiaId.value);
+    }
+    
+    // Si hay una fuente de audio activa para este ID, detenerla primero
     if (audioSources[id]) {
       audioSources[id].stop();
+      delete audioSources[id];
     }
     
     // Crear una nueva fuente de audio
@@ -423,6 +428,7 @@ const playFromPosition = (id, startTime, updateSourceOnly = false) => {
     
     // Actualizar el tiempo de inicio para el cálculo del progreso
     audioStartTimes[id] = audioContext.value.currentTime - startTime;
+    delete audioPauseTimes[id];
     
     // Configurar evento para cuando termine el audio
     source.onended = () => {
@@ -432,16 +438,14 @@ const playFromPosition = (id, startTime, updateSourceOnly = false) => {
     // Actualizar el progreso
     audioProgress[id] = startTime / audioDurations[id];
     
-    // Establecer como noticia activa si no es solo actualización de fuente
-    if (!updateSourceOnly) {
-      playingNoticiaId.value = id;
-      
-      // Configurar actualización de progreso
-      setupProgressUpdate(id);
-      
-      // Configurar eventos de timestamp
-      setupTimestampEvents(id);
-    }
+    // Establecer como noticia activa
+    playingNoticiaId.value = id;
+    
+    // Configurar actualización de progreso
+    setupProgressUpdate(id);
+    
+    // Configurar eventos de timestamp
+    setupTimestampEvents(id);
     
     return true;
   } catch (error) {
@@ -464,17 +468,11 @@ const seekAudio = (event, id) => {
   const width = rect.width;
   const percentage = x / width;
   
-  const newTime = percentage * audioDurations[id];
+  const playbackRate = getPlaybackRate(id);
+  const newTime = (percentage * audioDurations[id]) / playbackRate;
   
-  // Si ya está reproduciendo este audio, usar la función centralizada
-  if (isPlaying(id)) {
-    playFromPosition(id, newTime, true);
-  } else {
-    // Si no está reproduciendo, configurar para iniciar y usar playAudio
-    audioPauseTimes[id] = newTime;
-    audioProgress[id] = percentage;
-    playAudio(id);
-  }
+  // Siempre iniciar la reproducción desde la nueva posición
+  playFromPosition(id, newTime);
 };
 
 const seekToTimestamp = (id, timestamp) => {
@@ -559,6 +557,7 @@ const toggleExpand = (id) => {
   }
 };
 
+
 // Función para verificar si el texto necesita el botón "Leer más"
 const needsReadMore = (text) => {
   if (!text) return false;
@@ -584,6 +583,11 @@ const getPlaybackRate = (id) => {
 };
 
 const setPlaybackRate = (id, rate) => {
+  // Detener cualquier otro audio que esté reproduciéndose
+  if (playingNoticiaId.value !== null && playingNoticiaId.value !== id) {
+    stopAudio(playingNoticiaId.value);
+  }
+  
   // Guardar la velocidad de reproducción anterior
   const prevRate = audioPlaybackRates[id] || 1.0;
   // Actualizar la velocidad de reproducción
@@ -608,6 +612,14 @@ const startProgressDrag = (event, id) => {
   // Si hay otro audio reproduciéndose, detenerlo
   if (playingNoticiaId.value !== null && playingNoticiaId.value !== id) {
     stopAudio(playingNoticiaId.value);
+  }
+  
+  // Guardar el estado de reproducción actual
+  wasPlayingBeforeDrag.value = isPlaying(id);
+  
+  // Si el audio está reproduciéndose, pausarlo temporalmente
+  if (wasPlayingBeforeDrag.value) {
+    pauseAudio(id);
   }
   
   // Activar el modo de arrastre
@@ -639,39 +651,26 @@ const handleProgressDrag = (event) => {
 // Función para actualizar la posición del audio durante el arrastre
 const updateProgressPosition = (event) => {
   if (!isDragging.value || !currentDragId.value) return;
-  
-  // Cancelar el frame anterior si existe
+
   if (frameId.value) {
     cancelAnimationFrame(frameId.value);
   }
-  
-  // Programar la actualización en el próximo frame para optimizar el rendimiento
+
   frameId.value = requestAnimationFrame(() => {
-    // Obtener coordenadas del evento (mouse o touch)
     const clientX = event.touches ? event.touches[0].clientX : event.clientX;
-    
-    // Encontrar el contenedor para la noticia actual
     const container = document.querySelector(`.news-card[data-id="${currentDragId.value}"] .progress-container`);
     if (!container) return;
-    
-    // Calcular la posición relativa y el porcentaje
+
     const rect = container.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const percentage = Math.max(0, Math.min(1, x / rect.width));
+    const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
+    const percentage = x / rect.width;
     
-    // Calcular el nuevo tiempo basado en el porcentaje de la duración
-    const newTime = percentage * audioDurations[currentDragId.value];
+    const playbackRate = getPlaybackRate(currentDragId.value);
+    const adjustedTime = (percentage * audioDurations[currentDragId.value]) / playbackRate;
     
-    // Actualizar el progreso visual inmediatamente
+    // Actualizar solo el progreso visual y el tiempo de pausa
     audioProgress[currentDragId.value] = percentage;
-    
-    // Si está reproduciendo, actualizar la posición de audio en tiempo real
-    if (isPlaying(currentDragId.value)) {
-      playFromPosition(currentDragId.value, newTime, true);
-    } else {
-      // Si no está reproduciendo, sólo guardar el tiempo para cuando se inicie
-      audioPauseTimes[currentDragId.value] = newTime;
-    }
+    audioPauseTimes[currentDragId.value] = adjustedTime;
   });
 };
 
@@ -680,13 +679,20 @@ const endProgressDrag = () => {
   // Si no estábamos arrastrando, salir
   if (!isDragging.value || !currentDragId.value) return;
   
-  // Si no estaba reproduciendo, iniciar reproducción
-  if (!isPlaying(currentDragId.value) && audioBuffers[currentDragId.value]) {
-    playAudio(currentDragId.value);
+  const id = currentDragId.value;
+  const newTime = audioPauseTimes[id];
+  
+  // Reanudar la reproducción si estaba reproduciéndose antes
+  if (wasPlayingBeforeDrag.value) {
+    playFromPosition(id, newTime);
+  } else {
+    // Si no estaba reproduciéndose, actualizar solo el progreso visual
+    audioProgress[id] = newTime / audioDurations[id];
   }
   
   // Limpiar estado y event listeners
   isDragging.value = false;
+  wasPlayingBeforeDrag.value = false;
   
   if (frameId.value) {
     cancelAnimationFrame(frameId.value);
@@ -700,6 +706,10 @@ const endProgressDrag = () => {
   
   currentDragId.value = null;
 };
+
+
+
+
 
 // Ciclo de vida
 onMounted(async () => {
@@ -870,8 +880,8 @@ onUnmounted(() => {
 }
 
 .timestamp-item {
-  margin-bottom: 0.5rem;
-  padding: 0.8rem;
+  margin-bottom: 0.2rem;
+  padding: 0.2rem;
   border-radius: 4px;
   transition: all 0.3s ease;
   border-left: 3px solid transparent;
@@ -950,7 +960,7 @@ onUnmounted(() => {
   height: 100%;
   background-color: #ffff00;
   border-radius: 5px;
-  transition: width 0.05s;
+   transition: width 0.2s ease-out; /* Transición suave */
   pointer-events: none;
 }
 
