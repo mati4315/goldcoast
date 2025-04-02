@@ -20,9 +20,24 @@
             <img :src="noticia.imagen" :alt="noticia.title">
           </div>
           <div class="news-content">
-            <h3>{{ noticia.title }}</h3>
+            <h3>
+              {{ noticia.title }}
+              <button 
+                class="translate-icon global-translate"
+                :class="{ 'active': noticia.showAllTranslations }"
+                @click.stop="toggleAllTranslations(noticia)"
+                :title="noticia.showAllTranslations ? 
+                  (selectedLanguage === 'es' ? 'Ver todos en português' : 'Ver todos en español') : 
+                  (selectedLanguage === 'es' ? 'Ver todos en español' : 'Ver todos en português')"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" height="20" fill="currentColor" class="bi bi-eye" viewBox="0 0 16 16">
+                  <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8M1.173 8a13 13 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5s3.879 1.168 5.168 2.457A13 13 0 0 1 14.828 8q-.086.13-.195.288c-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5s-3.879-1.168-5.168-2.457A13 13 0 0 1 1.172 8z"/>
+                  <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0"/>
+                </svg>
+              </button>
+            </h3>
             
-            <div class="news-timestamps" v-if="noticia.timestamps && noticia.timestamps.length > 0">
+            <div class="news-timestamps" v-if="noticia.timestamps && noticia.timestamps.length > 0 && showTimestamps">
               <div 
                 v-for="(timestamp, index) in noticia.timestamps" 
                 :key="index"
@@ -32,7 +47,20 @@
                 }"
                 @click="seekToTimestamp(noticia.id, timestamp)"
               >
-                {{ timestamp.text }}
+                <span>{{ getTimestampText(timestamp) }}</span>
+                <button 
+                  class="translate-icon"
+                  :class="{ 'active': timestamp.showTranslation }"
+                  @click.stop="toggleTranslation(timestamp)"
+                  :title="timestamp.showTranslation ? 
+                    (selectedLanguage === 'es' ? 'Ver en português' : 'Ver en español') : 
+                    (selectedLanguage === 'es' ? 'Ver en español' : 'Ver en português')"
+                >
+                <svg xmlns="http://www.w3.org/2000/svg" height="20" fill="currentColor" class="bi bi-eye" viewBox="0 0 16 16">
+  <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8M1.173 8a13 13 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5s3.879 1.168 5.168 2.457A13 13 0 0 1 14.828 8q-.086.13-.195.288c-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5s-3.879-1.168-5.168-2.457A13 13 0 0 1 1.172 8z"/>
+  <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0"/>
+</svg>
+                </button>
               </div>
             </div>
             
@@ -47,7 +75,7 @@
             >
               {{ expandedNews.includes(noticia.id) ? 'Mostrar menos' : 'Leer más' }}
             </button>
-
+            
             <p class="news-date">{{ formatDate(noticia.pubDate) }}</p>
             
             <!-- Custom audio controls -->
@@ -90,7 +118,7 @@
                 </div>
                 <div class="speed-control">
                   <button 
-                    v-for="speed in [0.8, 1.0, 1.3]" 
+                    v-for="speed in [0.8, 1.0, 1.2]" 
                     :key="speed" 
                     @click="setPlaybackRate(noticia.id, speed)"
                     :class="['speed-button', { active: getPlaybackRate(noticia.id) === speed }]"
@@ -122,8 +150,17 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, reactive } from 'vue';
+import { ref, onMounted, onUnmounted, reactive, computed } from 'vue';
 import api from '../config/strapi';
+import AppHeader from '../components/AppHeader.vue';
+
+// Props para las configuraciones
+const props = defineProps({
+  configurations: {
+    type: Object,
+    required: true
+  }
+});
 
 // Estado
 const noticias = ref([]);
@@ -135,6 +172,13 @@ const observer = ref(null);
 const expandedNews = ref([]);
 const currentTimestampIndex = ref({});
 const playingNoticiaId = ref(null);
+
+// Referencias a las configuraciones del header
+const headerRef = ref(null);
+
+// Computed properties para las configuraciones
+const showTimestamps = computed(() => props.configurations.showTimestamps);
+const selectedLanguage = computed(() => props.configurations.language);
 
 // Estado para Web Audio API
 const audioContext = ref(null);
@@ -486,15 +530,8 @@ const seekToTimestamp = (id, timestamp) => {
     stopAudio(playingNoticiaId.value);
   }
   
-  // Si este audio ya está reproduciéndose, usar la función centralizada
-  if (isPlaying(id)) {
-    playFromPosition(id, targetTime, true);
-  } else {
-    // Si no está reproduciendo, configurar para iniciar y usar playAudio
-    audioPauseTimes[id] = targetTime;
-    audioProgress[id] = targetTime / audioDurations[id];
-    playAudio(id);
-  }
+  // Siempre usar playFromPosition para mantener la reproducción
+  playFromPosition(id, targetTime);
 };
 
 // Formatear fecha
@@ -546,22 +583,6 @@ const convertTimeToSeconds = (timeString) => {
     return minutes * 60 + seconds;
   }
   return parseFloat(timeString);
-};
-
-// Función para expandir o contraer la descripción de la noticia
-const toggleExpand = (id) => {
-  if (expandedNews.value.includes(id)) {
-    expandedNews.value = expandedNews.value.filter((i) => i !== id);
-  } else {
-    expandedNews.value.push(id);
-  }
-};
-
-
-// Función para verificar si el texto necesita el botón "Leer más"
-const needsReadMore = (text) => {
-  if (!text) return false;
-  return text.length > 722;
 };
 
 const getVolume = (id) => {
@@ -707,9 +728,47 @@ const endProgressDrag = () => {
   currentDragId.value = null;
 };
 
+// Función para expandir o contraer la descripción de la noticia
+const toggleExpand = (id) => {
+  if (expandedNews.value.includes(id)) {
+    expandedNews.value = expandedNews.value.filter((i) => i !== id);
+  } else {
+    expandedNews.value.push(id);
+  }
+};
 
+// Función para verificar si el texto necesita el botón "Leer más"
+const needsReadMore = (text) => {
+  if (!text) return false;
+  return text.length > 722;
+};
 
+// Función para obtener el texto del timestamp según el idioma seleccionado
+const getTimestampText = (timestamp) => {
+  if (selectedLanguage.value === 'pt' && timestamp.showTranslation) {
+    return timestamp.text_pt;
+  } else if (selectedLanguage.value === 'es' && timestamp.showTranslation) {
+    return timestamp.text_es;
+  }
+  return timestamp.text;
+};
 
+// Función para alternar entre traducciones
+const toggleTranslation = (timestamp) => {
+  timestamp.showTranslation = !timestamp.showTranslation;
+};
+
+// Función para alternar todas las traducciones de una noticia
+const toggleAllTranslations = (noticia) => {
+  if (!noticia.timestamps) return;
+  
+  noticia.showAllTranslations = !noticia.showAllTranslations;
+  
+  // Actualizar todos los timestamps de la noticia
+  noticia.timestamps.forEach(timestamp => {
+    timestamp.showTranslation = noticia.showAllTranslations;
+  });
+};
 
 // Ciclo de vida
 onMounted(async () => {
@@ -752,6 +811,7 @@ onUnmounted(() => {
   color: white;
   margin: 0;
   padding: 0;
+  padding-top: 80px; /* Ajusta este valor según la altura de tu header */
 }
 
 .hero-section {
@@ -791,7 +851,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 2rem;
-  padding: 0 2rem;
+  padding: 0 6rem;
 }
 
 .news-card {
@@ -828,29 +888,15 @@ onUnmounted(() => {
 .news-content h3 {
   margin-bottom: 0.5rem;
   color: white;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .news-date {
   font-size: 0.9rem;
   color: #ccc;
   margin-bottom: 1rem;
-}
-
-.news-description {
-  color: #ddd;
-  margin-bottom: 1rem;
-  display: -webkit-box;
-  -webkit-line-clamp: 5;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  transition: all 0.3s ease;
-  line-height: 1.5;
-  max-height: 7.5em; /* Aproximadamente 5 líneas de texto */
-}
-
-.news-description.expanded {
-  -webkit-line-clamp: unset;
-  max-height: none;
 }
 
 .news-timestamps {
@@ -880,6 +926,9 @@ onUnmounted(() => {
 }
 
 .timestamp-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 0.2rem;
   padding: 0.2rem;
   border-radius: 4px;
@@ -1102,6 +1151,9 @@ onUnmounted(() => {
 @media (max-width: 768px) {
   .news-card {
     flex-direction: column;
+    border-radius: 0;
+    margin: 0.5rem 0;
+    box-shadow: none;
   }
   
   .news-image {
@@ -1110,22 +1162,70 @@ onUnmounted(() => {
   }
   
   .news-list {
-    padding: 0 1rem;
+    padding: 0;
+    margin: 0;
+    gap: 0.5rem;
   }
-  
-  .audio-controls {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
+
+  .news-content {
+    padding: 1rem;
   }
-  
-  .volume-control, .speed-control {
-    margin-bottom: 8px;
+
+  .news-container h2 {
+    padding: 0 1rem 0.5rem 1rem;
+    margin: 0 0 1rem 0;
   }
-  
-  .time-display {
-    align-self: flex-end;
+
+  .home-page {
+    padding-top: 120px; /* Aumentar el padding en móvil debido al header más alto */
   }
+}
+
+.news-description {
+  color: #ddd;
+  margin-bottom: 1rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  transition: all 0.3s ease;
+  line-height: 1.5;
+  max-height: 7.5em; /* Aproximadamente 5 líneas de texto */
+}
+
+.news-description.expanded {
+  -webkit-line-clamp: unset;
+  max-height: none;
+}
+
+.translate-icon {
+  background: none;
+  border: none;
+  color: #ccc;
+  cursor: pointer;
+  padding: 4px;
+  font-size: 1.2rem;
+  opacity: 0.7;
+  transition: all 0.2s;
+}
+
+.translate-icon:hover {
+  opacity: 1;
+}
+
+.translate-icon.active {
+  color: #ffff00;
+  opacity: 1;
+}
+
+.global-translate {
+  padding: 2px;
+  margin-left: 0.5rem;
+}
+
+.global-translate.active {
+  color: #ffff00;
+  opacity: 1;
 }
 </style>
 

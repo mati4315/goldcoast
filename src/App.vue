@@ -1,18 +1,50 @@
 <script setup>
+import { ref, reactive } from 'vue';
+import AppHeader from './components/AppHeader.vue';
 import MainLayout from './layouts/MainLayout.vue'
+
+const headerRef = ref(null);
+const configurations = reactive({
+  language: 'es',
+  showTimestamps: true
+});
+
+const updateConfigurations = (newConfigs) => {
+  Object.assign(configurations, newConfigs);
+};
 </script>
 
 <template>
-  <MainLayout>
-    <router-view></router-view>
-  </MainLayout>
+  <div class="app">
+    <AppHeader 
+      ref="headerRef" 
+      @update:configurations="updateConfigurations"
+    />
+    <MainLayout>
+      <router-view :configurations="configurations"></router-view>
+    </MainLayout>
+  </div>
 </template>
 
 <style>
+.app {
+  min-height: 100vh;
+  background-color: black;
+  color: white;
+}
+
+/* Reset básico */
 * {
-  box-sizing: border-box;
   margin: 0;
   padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: Arial, sans-serif;
+  line-height: 1.6;
+  background-color: black;
+  color: white;
 }
 
 html, body {
@@ -21,13 +53,6 @@ html, body {
   margin: 0;
   padding: 0;
   overflow-x: hidden;
-}
-
-body {
-  font-family: 'Arial', sans-serif;
-  line-height: 1.6;
-  color: #333;
-  background-color: #000;
 }
 
 a {
